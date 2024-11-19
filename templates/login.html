@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login com Reconhecimento Facial</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+    <style>
+        body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0; /* Remove margens padrão do body */
+    background-color: #f4f4f4;
+    font-family: Arial, sans-serif;
+}
+
+#webcamContainer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    width: 80%;
+    max-width: 600px;
+}
+
+video {
+    border: 2px solid #333;
+    width: 100%; /* Ajusta para 100% da largura do container */
+    height: auto; /* Mantém a proporção */
+}
+
+#outputCanvas {
+    position: absolute;
+    left: 50%;
+    transform: translate(-50%, 0); /* Centraliza horizontalmente */
+    top: 0;
+    z-index: 1;
+}
+
+#loginForm {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-top: 20px;
+}
+
+#loginForm input[type="email"] {
+    margin: 10px;
+    padding: 10px;
+    width: 100%; /* Ajusta para 100% da largura do container */
+    max-width: 600px; /* Limita a largura máxima */
+}
+
+#loginForm button {
+    padding: 10px;
+    width: 80%;
+    max-width: 300px; /* Limita a largura máxima do botão */
+    background-color: #28a745;
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+#loginForm button:hover {
+    background-color: #218838;
+}
+
+#loginForm button:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+}
+
+.error-message {
+    color: #dc3545;
+    margin: 10px 0;
+    text-align: center;
+}
+
+.loading-spinner {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #3498db;
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    animation: spin 1s linear infinite;
+    display: none;
+}
+
+@keyframes spin {
+   0% { transform: rotate(0deg); }
+   100% { transform: rotate(360deg); }
+}
+    </style>
+</head>
+<body>
+    <h1>Faça login para continuar</h1>
+    <div class="webcamContainer">
+        <video id="video" autoplay></video>
+        <canvas id="outputCanvas"></canvas>
+    </div>
+
+    <div id="errorMessage" class="error-message"></div>
+    <div id="loadingSpinner" class="loading-spinner"></div>
+
+    <form id="loginForm" method="POST" action="{{ url_for('bp.login') }}">
+        <input type="email" name="email" placeholder="Digite seu email" required>
+        <input type="hidden" name="photo" id="photoData">
+        <button type="submit" id="submitButton">Login</button>
+    </form>
+    <a href="{{url_for('bp.index')}}">Voltar</a>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('outputCanvas');
+        const photoDataInput = document.getElementById('photoData');
+        const ctx = canvas.getContext('2d');
+        const errorMessage = document.getElementById('errorMessage');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const submitButton = document.getElementById('submitButton');
+        let model = null;
+        let faceDetected = false;
+
+        // Configurar dimensões do canvas
+        function setupCanvasDimensions() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        }
+
+        // Mostrar mensagem de erro
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            setTimeout(() => {
+                errorMessage.style.display = 'none';
+            }, 3000);
+        }
+
+        // Carregar o modelo BlazeFace
+        async function loadModel() {
+            try {
+                loadingSpinner.style.display = 'block';
+                model = await blazeface.load();
+                console.log('Modelo de detecção facial carregado');
+            } catch (error) {
+                showError('Erro ao carregar o modelo de detecção facial');
+                console.error(error);
+            } finally {
+                loadingSpinner.style.display = 'none';
+            }
+        }
+
+        // Inicializar webcam com tratamento de erros
+        async function setupCamera() {
+            try {
+                const constraints = {
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: "user"
+                    }
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        setupCanvasDimensions();
+                        resolve(video);
+                    };
+                });
+            } catch (error) {
+                showError('Erro ao acessar a câmera. Verifique as permissões.');
+                console.error(error);
+            }
+        }
+
+        // Função para otimizar a imagem
+        function optimizeImage(dataUrl) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    const maxWidth = 800;
+                    const maxHeight = 600;
+                    let width = img.width;
+                    let height = img.height;
+
+                    // Redimensionar mantendo a proporção
+                    if (width > maxWidth) {
+                        height = Math.round(height * (maxWidth / width));
+                        width = maxWidth;
+                    }
+                    if (height > maxHeight) {
+                        width = Math.round(width * (maxHeight / height));
+                        height = maxHeight;
+                    }
+
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = width;
+                    tempCanvas.height = height;
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCtx.drawImage(img, 0, 0, width, height);
+
+                    // Comprimir a imagem
+                    resolve(tempCanvas.toDataURL('image/jpeg', 0.8));
+                };
+                img.src = dataUrl;
+            });
+        }
+
+        // Função para desenhar landmarks
+        function drawLandmark(ctx, x, y, radius = 2) {
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, 2 * Math.PI);
+            ctx.fillStyle = '#ff0000';
+            ctx.fill();
+        }
+
+        // Função de detecção facial e landmarks com validações
+        async function detectFaces() {
+            if (!model) return;
+
+            try {
+                const predictions = await model.estimateFaces(video, false);
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                faceDetected = predictions.length === 1;
+                submitButton.disabled = !faceDetected;
+
+                if (predictions.length > 1) {
+                    showError('Apenas uma face deve estar visível');
+                } else if (predictions.length === 0) {
+                    showError('Nenhuma face detectada');
+                } else {
+                    predictions.forEach(prediction => {
+                        // Validar posição da face
+                        const face = prediction.topLeft;
+                        const size = [
+                            prediction.bottomRight[0] - prediction.topLeft[0],
+                            prediction.bottomRight[1] - prediction.topLeft[1]
+                        ];
+
+                        // Verificar se a face está centralizada
+                        const centerX = face[0] + size[0] / 2;
+                        const centerY = face[1] + size[1] / 2;
+                        const canvasCenter = canvas.width / 2;
+
+                        if (Math.abs(centerX - canvasCenter) > 100) {
+                            showError('Centralize seu rosto');
+                            faceDetected = false;
+                        }
+
+                        // Desenhar retângulo e landmarks
+                        ctx.strokeStyle = '#00ff00';
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(face[0], face[1], size[0], size[1]);
+
+                        const landmarks = prediction.landmarks;
+                        landmarks.forEach(point => {
+                            drawLandmark(ctx, point[0], point[1]);
+                        });
+                    });
+                }
+            } catch (error) {
+                console.error('Erro na detecção facial:', error);
+            }
+
+            requestAnimationFrame(detectFaces);
+        }
+
+        // Capturar e otimizar imagem
+        async function captureImage() {
+            if (!faceDetected) {
+                showError('Posicione seu rosto corretamente antes de continuar');
+                return false;
+            }
+
+            const captureCanvas = document.createElement('canvas');
+            captureCanvas.width = video.videoWidth;
+            captureCanvas.height = video.videoHeight;
+            const captureCtx = captureCanvas.getContext('2d');
+
+            captureCtx.drawImage(video, 0, 0);
+            captureCtx.drawImage(canvas, 0, 0);
+
+            try {
+                const optimizedDataUrl = await optimizeImage(captureCanvas.toDataURL('image/jpeg'));
+                photoDataInput.value = optimizedDataUrl;
+                return true;
+            } catch (error) {
+                showError('Erro ao processar a imagem');
+                console.error(error);
+                return false;
+            }
+        }
+
+        // Event listener para o formulário
+        document.getElementById('loginForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            loadingSpinner.style.display = 'block';
+            submitButton.disabled = true;
+
+            if (await captureImage()) {
+                this.submit();
+            } else {
+                loadingSpinner.style.display = 'none';
+                submitButton.disabled = false;
+            }
+        });
+
+        // Iniciar a aplicação
+        init();
+
+        async function init() {
+            await loadModel();
+            await setupCamera();
+            detectFaces();
+        }
+    </script>
+</body>
+</html>

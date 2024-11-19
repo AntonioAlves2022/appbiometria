@@ -1,0 +1,10 @@
+flask
+flask-sqlalchemy
+opencv-python
+mediapipe
+deepface
+psycopg2-binary
+bcrypt
+cryptography
+python-dotenv
+gunicorn
