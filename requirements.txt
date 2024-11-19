@@ -8,3 +8,11 @@ bcrypt
 cryptography
 python-dotenv
 gunicorn
+numpy
+mediapipe
+deepface
+psycopg2-binary
+gunicorn
+flask
+flask-sqlalchemy
+python-dotenv
